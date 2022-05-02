@@ -2,46 +2,87 @@ import torch
 import numpy as np 
 import scipy.sparse as sp 
 
-def load_data(dataset="cora"):
+
+def load_graph():
+    graph_path = "../data/train.csv"
+    node_label_path = "../data/node_ingredient.csv"
+    NUM_INGREDIENT = None
+    NUM_FOOD = None
+    NUM_CUISINE = None
+    INGREDIENT_START_IDX = 0
+    FOOD_START_IDX = None
+    CUISINE_START_IDX = None
+
     
-    print("loading {} dataset ... ". format(dataset))
+    print(f"loading graph from {graph_path}")
 
-    path="./data/"+dataset+"/" 
+    # load node labels (names of ingredients)
+    ingredient_idx = np.genfromtxt("{}".format(graph_path), delimiter='\n', dtype=np.dtype(str)).tolist()
+    NUM_INGREDIENT = len(ingredient_idx)
+    FOOD_START_IDX = NUM_INGREDIENT
 
-    if dataset == 'cora':
-        idx_features_labels = np.genfromtxt("{}{}.content".format(path,dataset), dtype=np.dtype(str))
-        features = sp.csr_matrix(idx_features_labels[:,1:-1], dtype=np.float32)
-        labels = encode_onehot(idx_features_labels[:,-1])
+    # load edges
+    # 
+    # edges : list of ordered pairs 
+    edges = []
+    with open(graph_path, 'r') as f:
+        lines = f.readlines()
 
-        idx = np.array(idx_features_labels[:,0],dtype=np.int32)
-        idx_map = {j: i for i,j in enumerate(idx)}
-        edges_unordered = np.genfromtxt("{}{}.cites".format(path,dataset), dtype=np.int32)
-        edges = np.array(list(map(idx_map.get, edges_unordered.flatten())), dtype=np.int32).reshape(edges_unordered.shape)
-        adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:,0], edges[:,1])), shape=(labels.shape[0], labels.shape[0]), dtype=np.float32)
+    NUM_FOOD = len(lines)
+    CUISINE_START_IDX = NUM_INGREDIENT + NUM_FOOD
+    food_idx = list(map(lambda x: str(x), range(NUM_FOOD)))
+    cuisine_idx = []
 
-    elif dataset == 'citeseer':
-        # TODO step 3.
-        pass
-    
+    for i, line in enumerate(lines):
+        tokens = line.strip().split(',')
+        ingredients, cuisine = tokens[:-1], tokens[-1]
+
+        # get  food node number
+        food_node = food_idx.index(str(i)) 
+
+        # get cuisine node number
+        if cuisine not in cuisine_idx:
+            cuisine_idx.append(cuisine)
+        cuisine_node = CUISINE_START_IDX + cuisine_idx.index(cuisine)
+        
+        edges.extend([
+            [food_node, cuisine_node],
+            [cuisine_node, food_node]
+        ])
+
+        for a in ingredients:
+            edges.extend([
+                [int(a), food_node],
+                [food_node, int(a)]
+            ])
+            for b in ingredients:
+                if a == b: 
+                    continue
+                edges.append([int(a), int(b)])
+
+    NUM_CUISINE = len(cuisine_idx)
+
+    node_labels = np.concatenate([ingredient_idx, food_idx, cuisine_idx], axis=0).astype(np.str)
+    edges = np.array(edges, dtype=np.int32)
+    adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:,0], edges[:,1])), shape=(node_labels.shape[0], node_labels.shape[0]), dtype=np.float32)
+
     adj = adj + adj.T.multiply(adj.T>adj) - adj.multiply(adj.T>adj)
-    features = normalize_features(features)
+
+    # features are initialized to zero
+    # features = normalize_features(features)
     adj = normalize_adj(adj+sp.eye(adj.shape[0]))
 
-    idx_train = range(140)
-    idx_val = range(200,500)
-    idx_test = range(500,1500)
+    idx_ingredient = [0, NUM_INGREDIENT - 1] 
+    idx_food = [FOOD_START_IDX, CUISINE_START_IDX - 1]
+    idx_cuisine = [CUISINE_START_IDX, CUISINE_START_IDX + NUM_CUISINE - 1]
 
     adj = torch.FloatTensor(np.array(adj.todense()))
-    features = torch.FloatTensor(np.array(features.todense()))
-    labels = torch.LongTensor(np.where(labels)[1])
 
-    idx_train = torch.LongTensor(idx_train)
-    idx_val = torch.LongTensor(idx_val)
-    idx_test = torch.LongTensor(idx_test)
+    # idx_train = torch.LongTensor(idx_train)
+    # idx_val = torch.LongTensor(idx_val)
+    # idx_test = torch.LongTensor(idx_test)
 
-    return adj, features, labels, idx_train, idx_val, idx_test 
-
-      
+    return {'adj': adj, 'idx_ingredient': idx_ingredient, 'idx_food': idx_food, 'idx_cuisine': idx_cuisine, 'node_labels': node_labels}
 
 def accuracy(output, labels):
     preds = output.max(1)[1].type_as(labels)
